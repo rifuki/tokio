@@ -2133,7 +2133,7 @@ cfg_rt_multi_thread! {
 
             // Create the blocking pool
             let blocking_pool =
-                blocking::create_blocking_pool(self, self.max_blocking_threads + worker_threads);
+                blocking::create_blocking_pool(self, self.max_blocking_threads.saturating_add(worker_threads));
             let blocking_spawner = blocking_pool.spawner().clone();
 
             // Generate a rng seed for this runtime.

@@ -84,12 +84,20 @@ impl BlockingRegionGuard {
         let mut cx = Context::from_waker(&waker);
 
         pin!(f);
-        let when = Instant::now() + timeout;
+        // A timeout large enough to overflow `Instant` names a deadline that
+        // can never be reached, so treat it as no deadline at all rather than
+        // panicking. `Runtime::shutdown_timeout(Duration::MAX)` reaches here.
+        let when = Instant::now().checked_add(timeout);
 
         loop {
             if let Ready(v) = crate::task::coop::budget(|| f.as_mut().poll(&mut cx)) {
                 return Ok(v);
             }
+
+            let Some(when) = when else {
+                park.park();
+                continue;
+            };
 
             let now = Instant::now();
 

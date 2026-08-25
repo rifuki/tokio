@@ -518,3 +518,30 @@ fn before_park_yields() {
 
     assert!(woken.load(Ordering::SeqCst));
 }
+
+#[test]
+fn shutdown_timeout_with_max_duration() {
+    // `Duration::MAX` overflows `Instant::now() + timeout`. It names a deadline
+    // that can never be reached, so it must behave like "wait for shutdown",
+    // not panic.
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .build()
+        .unwrap();
+    rt.shutdown_timeout(Duration::MAX);
+}
+
+#[test]
+fn builder_max_blocking_threads_does_not_overflow() {
+    // `max_blocking_threads + worker_threads` used to overflow: a debug panic
+    // in `build()`, and in release a wrapped thread cap that left the blocking
+    // pool unable to run anything.
+    let rt = tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(2)
+        .max_blocking_threads(usize::MAX)
+        .build()
+        .unwrap();
+
+    let (tx, rx) = std::sync::mpsc::channel();
+    rt.spawn_blocking(move || tx.send(42).unwrap());
+    assert_eq!(rx.recv_timeout(Duration::from_secs(10)).unwrap(), 42);
+}
