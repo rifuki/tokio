@@ -287,3 +287,41 @@ async fn windows_handle() {
     let file = File::create(tempfile.path()).await.unwrap();
     assert!(file.as_raw_handle() as u64 > 0);
 }
+
+#[tokio::test]
+async fn seek_current_overflow_is_an_error_and_keeps_buffered_data() {
+    use std::future::Future;
+    use std::io::SeekFrom;
+    use tokio::io::{AsyncReadExt, AsyncSeekExt};
+
+    let tempfile = tempfile();
+    std::fs::write(tempfile.path(), b"hello world").unwrap();
+
+    let mut file = File::open(tempfile.path()).await.unwrap();
+
+    // Poll a read exactly once and drop it. The read reaches the blocking pool
+    // and fills the internal buffer, but nothing is taken out of it, so the
+    // following seek has to adjust a `Current` offset by the negative buffered
+    // length.
+    {
+        let mut one = [0u8; 1];
+        let mut read = std::pin::pin!(file.read(&mut one));
+        std::future::poll_fn(|cx| {
+            let _ = read.as_mut().poll(cx);
+            std::task::Poll::Ready(())
+        })
+        .await;
+    }
+
+    // Adjusting i64::MIN by that negative length overflows. std reports
+    // InvalidInput for this seek, so tokio must too rather than panicking in
+    // debug or wrapping to a huge positive offset in release.
+    let err = file.seek(SeekFrom::Current(i64::MIN)).await.unwrap_err();
+    assert_eq!(err.kind(), std::io::ErrorKind::InvalidInput);
+
+    // The cancelled read took nothing out of the buffer, and the failed seek
+    // must not have discarded it either.
+    let mut rest = String::new();
+    file.read_to_string(&mut rest).await.unwrap();
+    assert_eq!(rest, "hello world");
+}

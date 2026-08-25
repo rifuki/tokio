@@ -687,11 +687,26 @@ impl AsyncSeek for File {
 
                 // Factor in any unread data from the buf
                 if !buf.is_empty() {
-                    let n = buf.discard_read();
+                    let n = -(buf.bytes().len() as i64);
 
                     if let SeekFrom::Current(ref mut offset) = pos {
-                        *offset += n;
+                        match offset.checked_add(n) {
+                            Some(adjusted) => *offset = adjusted,
+                            None => {
+                                // The adjusted offset is not representable, so
+                                // no seek happens. Keep the buffered data
+                                // rather than discarding it for a seek that
+                                // never runs.
+                                *buf_cell = Some(buf);
+                                return Err(io::Error::new(
+                                    io::ErrorKind::InvalidInput,
+                                    "invalid seek to a negative or overflowing position",
+                                ));
+                            }
+                        }
                     }
+
+                    buf.discard_read();
                 }
 
                 let std = me.std.clone();
