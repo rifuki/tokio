@@ -242,7 +242,14 @@ impl<W: AsyncWrite + AsyncSeek> AsyncSeek for BufWriter<W> {
         };
 
         // Flush the internal buffer before seeking.
-        ready!(self.as_mut().flush_buf(cx))?;
+        //
+        // On failure the seek never starts, so drop the pending state as well.
+        // Leaving it behind would make the next `poll_complete` replay this
+        // seek, even one issued by `stream_position`.
+        if let Err(e) = ready!(self.as_mut().flush_buf(cx)) {
+            *self.project().seek_state = SeekState::Init;
+            return Poll::Ready(Err(e));
+        }
 
         let mut me = self.project();
         if let Some(pos) = pos {

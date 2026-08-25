@@ -535,3 +535,84 @@ async fn write_vectored_large_slice_on_vectored() {
     assert_eq!(bytes_written, msg.len());
     assert_eq!(h.flush().await, msg);
 }
+
+#[tokio::test]
+async fn seek_state_is_reset_when_the_flush_fails() {
+    use std::io::SeekFrom;
+    use std::pin::Pin;
+    use std::task::{Context, Poll};
+    use tokio::io::{AsyncSeek, AsyncSeekExt, AsyncWrite, AsyncWriteExt, BufWriter};
+
+    // Fails the first write, succeeds after that. Records every seek it is
+    // asked to perform.
+    struct Recorder {
+        fail_next_write: bool,
+        seeks: Vec<SeekFrom>,
+        pos: u64,
+    }
+
+    impl AsyncWrite for Recorder {
+        fn poll_write(
+            self: Pin<&mut Self>,
+            _: &mut Context<'_>,
+            buf: &[u8],
+        ) -> Poll<io::Result<usize>> {
+            let me = self.get_mut();
+            if me.fail_next_write {
+                me.fail_next_write = false;
+                return Poll::Ready(Err(io::Error::new(io::ErrorKind::Other, "boom")));
+            }
+            me.pos += buf.len() as u64;
+            Poll::Ready(Ok(buf.len()))
+        }
+
+        fn poll_flush(self: Pin<&mut Self>, _: &mut Context<'_>) -> Poll<io::Result<()>> {
+            Poll::Ready(Ok(()))
+        }
+
+        fn poll_shutdown(self: Pin<&mut Self>, _: &mut Context<'_>) -> Poll<io::Result<()>> {
+            Poll::Ready(Ok(()))
+        }
+    }
+
+    impl AsyncSeek for Recorder {
+        fn start_seek(self: Pin<&mut Self>, pos: SeekFrom) -> io::Result<()> {
+            let me = self.get_mut();
+            me.seeks.push(pos);
+            if let SeekFrom::Start(n) = pos {
+                me.pos = n;
+            }
+            Ok(())
+        }
+
+        fn poll_complete(self: Pin<&mut Self>, _: &mut Context<'_>) -> Poll<io::Result<u64>> {
+            Poll::Ready(Ok(self.pos))
+        }
+    }
+
+    let mut w = BufWriter::new(Recorder {
+        fail_next_write: true,
+        seeks: Vec::new(),
+        pos: 0,
+    });
+
+    // Buffer something so the seek has to flush first, then let that flush fail.
+    w.write_all(b"hello").await.unwrap();
+    let err = w.seek(SeekFrom::Start(100)).await.unwrap_err();
+    assert_eq!(err.kind(), io::ErrorKind::Other);
+
+    // The seek never reached the inner writer.
+    assert!(w.get_ref().seeks.is_empty());
+
+    // A later position query must not replay the seek that failed.
+    let pos = w.stream_position().await.unwrap();
+    assert_eq!(
+        pos, 5,
+        "expected the position after the retried write, not 100"
+    );
+    assert!(
+        !w.get_ref().seeks.contains(&SeekFrom::Start(100)),
+        "the failed seek was replayed: {:?}",
+        w.get_ref().seeks
+    );
+}
