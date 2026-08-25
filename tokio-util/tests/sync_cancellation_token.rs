@@ -613,3 +613,102 @@ fn different_cancellation_tokens_have_different_hash() {
     token2.hash(&mut state2);
     assert_ne!(state1.finish(), state2.finish());
 }
+
+#[test]
+fn panic_guard_does_not_cancel_on_normal_drop() {
+    let token = CancellationToken::new();
+    let child = token.child_token();
+
+    {
+        let _guard = token.clone().panic_guard();
+    }
+
+    assert!(!token.is_cancelled());
+    assert!(!child.is_cancelled());
+}
+
+#[test]
+fn panic_guard_token_accessor() {
+    let token = CancellationToken::new();
+    let guard = token.clone().panic_guard();
+
+    assert_eq!(guard.token(), &token);
+    assert!(!guard.token().is_cancelled());
+}
+
+#[cfg(panic = "unwind")]
+#[test]
+fn panic_guard_cancels_on_panic() {
+    use std::panic::{catch_unwind, AssertUnwindSafe};
+
+    let token = CancellationToken::new();
+    let child = token.child_token();
+
+    let res = catch_unwind(AssertUnwindSafe(|| {
+        let _guard = token.clone().panic_guard();
+        panic!("boom");
+    }));
+
+    assert!(res.is_err());
+    assert!(token.is_cancelled());
+    assert!(child.is_cancelled());
+}
+
+#[cfg(panic = "unwind")]
+#[test]
+fn panic_guard_disarm_does_not_cancel_on_panic() {
+    use std::panic::{catch_unwind, AssertUnwindSafe};
+
+    let token = CancellationToken::new();
+
+    let res = catch_unwind(AssertUnwindSafe(|| {
+        let guard = token.clone().panic_guard();
+        let disarmed = guard.disarm();
+        assert_eq!(disarmed, token);
+        panic!("boom");
+    }));
+
+    assert!(res.is_err());
+    assert!(!token.is_cancelled());
+}
+
+#[cfg(panic = "unwind")]
+#[tokio::test(flavor = "multi_thread")]
+async fn panic_guard_fires_when_task_panics() {
+    let token = CancellationToken::new();
+    let child = token.child_token();
+
+    let handle = tokio::spawn({
+        let token = token.clone();
+        async move {
+            let _guard = token.panic_guard();
+            tokio::task::yield_now().await;
+            panic!("task failed");
+        }
+    });
+
+    let err = handle.await.unwrap_err();
+    assert!(err.is_panic());
+    assert!(child.is_cancelled());
+}
+
+#[cfg(panic = "unwind")]
+#[test]
+fn panic_guard_fires_during_unrelated_unwind() {
+    use std::panic::{catch_unwind, AssertUnwindSafe};
+
+    // Documented behaviour, not a bug: `thread::panicking()` is true for the
+    // whole unwind, so a guard dropped as part of someone else's panic also
+    // cancels.
+    struct Holder(#[allow(dead_code)] tokio_util::sync::PanicGuard);
+
+    let token = CancellationToken::new();
+
+    let res = catch_unwind(AssertUnwindSafe(|| {
+        let _holder = Holder(token.clone().panic_guard());
+        panic!("unrelated");
+    }));
+
+    assert!(res.is_err());
+    assert!(token.is_cancelled());
+}
