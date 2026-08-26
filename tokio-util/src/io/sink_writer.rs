@@ -98,6 +98,13 @@ where
         cx: &mut Context<'_>,
         buf: &[u8],
     ) -> Poll<Result<usize, io::Error>> {
+        // An empty write is a no-op everywhere else in tokio and tokio-util, so
+        // it must not become an item in the sink. Running the handshake for one
+        // would also make the write wait for sink capacity it does not need.
+        if buf.is_empty() {
+            return Poll::Ready(Ok(0));
+        }
+
         let mut this = self.project();
 
         ready!(this.inner.as_mut().poll_ready(cx).map_err(Into::into))?;

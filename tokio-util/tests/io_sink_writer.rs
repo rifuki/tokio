@@ -70,3 +70,27 @@ async fn test_direct_sink_writer() -> Result<(), Error> {
 
     Ok(())
 }
+
+#[tokio::test]
+async fn empty_write_does_not_reach_the_sink() -> Result<(), Error> {
+    // Capacity 2 so that an unwanted empty item cannot make the second write
+    // block: the failure should be a wrong item, not a hang.
+    let (tx, mut rx) = tokio::sync::mpsc::channel::<Bytes>(2);
+    let mut writer = SinkWriter::new(CopyToBytes::new(
+        PollSender::new(tx).sink_map_err(|_| io::Error::from(ErrorKind::BrokenPipe)),
+    ));
+
+    // An empty write is a no-op for every other `AsyncWrite` in tokio and
+    // tokio-util, so it must not push an item into the sink.
+    assert_eq!(writer.write(&[]).await?, 0);
+    writer.write(b"hello").await?;
+    writer.flush().await?;
+
+    assert_eq!(
+        rx.recv().await.unwrap().to_vec(),
+        b"hello".to_vec(),
+        "an empty write was forwarded to the sink as a real item"
+    );
+
+    Ok(())
+}
