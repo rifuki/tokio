@@ -175,8 +175,11 @@ where
         }
     }
 
-    fn poll_shutdown(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<Result<(), io::Error>> {
-        Poll::Ready(Ok(()))
+    fn poll_shutdown(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), io::Error>> {
+        // Shutting down must not report success while buffered data is still
+        // unwritten: the contract on `poll_shutdown` says `Ready(Ok(()))` means
+        // it is safe to drop the resource.
+        self.poll_flush(cx)
     }
 }
 
@@ -335,5 +338,47 @@ cfg_fs! {
 
             max_buf_size - rem
         }
+    }
+}
+
+#[cfg(all(test, feature = "rt", any(feature = "io-std", feature = "fs")))]
+mod tests {
+    use super::*;
+    use crate::io::AsyncWriteExt;
+    use std::sync::{Arc, Mutex};
+
+    struct Recorder(Arc<Mutex<bool>>);
+
+    impl Write for Recorder {
+        fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+            Ok(buf.len())
+        }
+
+        fn flush(&mut self) -> io::Result<()> {
+            *self.0.lock().unwrap() = true;
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn shutdown_flushes_the_inner_writer() {
+        let rt = crate::runtime::Builder::new_current_thread()
+            .build()
+            .unwrap();
+
+        let flushed = Arc::new(Mutex::new(false));
+
+        rt.block_on(async {
+            // SAFETY: `Recorder` never reads from the buffer it is lent.
+            let mut writer = unsafe { Blocking::new(Recorder(flushed.clone())) };
+
+            writer.write_all(b"hello").await.unwrap();
+            writer.shutdown().await.unwrap();
+        });
+
+        assert!(
+            *flushed.lock().unwrap(),
+            "shutdown() reported success without flushing the inner writer"
+        );
     }
 }
