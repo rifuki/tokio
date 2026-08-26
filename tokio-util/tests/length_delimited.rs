@@ -301,6 +301,25 @@ fn read_incomplete_payload() {
 }
 
 #[test]
+fn read_incomplete_payload_at_head_boundary() {
+    // The head is delivered whole and announces a 9 byte payload, then the
+    // stream ends before a single payload byte arrives. The read buffer is
+    // empty at EOF, so only the codec's own state can tell this apart from a
+    // clean end of stream.
+    let io = FramedRead::new(
+        mock! {
+            data(b"\x00\x00\x00\x09"),
+            Poll::Pending,
+        },
+        LengthDelimitedCodec::new(),
+    );
+    pin_mut!(io);
+
+    assert_next_pending!(io);
+    assert_next_err!(io);
+}
+
+#[test]
 fn read_max_frame_len() {
     let io = length_delimited::Builder::new()
         .max_frame_length(5)

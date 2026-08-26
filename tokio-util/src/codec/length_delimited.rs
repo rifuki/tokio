@@ -601,6 +601,35 @@ impl Decoder for LengthDelimitedCodec {
             None => Ok(None),
         }
     }
+
+    fn decode_eof(&mut self, src: &mut BytesMut) -> io::Result<Option<BytesMut>> {
+        if let Some(frame) = self.decode(src)? {
+            return Ok(Some(frame));
+        }
+
+        if !src.is_empty() {
+            // Same as the default `Decoder::decode_eof`: trailing bytes that do
+            // not form a whole frame end the stream with an error.
+            return Err(io::Error::new(
+                io::ErrorKind::Other,
+                "bytes remaining on stream",
+            ));
+        }
+
+        if let DecodeState::Data(_) = self.state {
+            // The head was decoded in full, so a payload was announced that
+            // never arrived. `src` is empty, which is exactly what hides this
+            // from the default `decode_eof`: it only looks at the buffer, so it
+            // reports a clean end of stream for a frame truncated at the head
+            // boundary.
+            return Err(io::Error::new(
+                io::ErrorKind::UnexpectedEof,
+                "unexpected EOF in the middle of a frame",
+            ));
+        }
+
+        Ok(None)
+    }
 }
 
 impl Encoder<&[u8]> for LengthDelimitedCodec {
