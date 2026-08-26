@@ -223,14 +223,22 @@ impl<T, U> Framed<T, U> {
         F: FnOnce(U) -> C,
     {
         // This could be potentially simplified once rust-lang/rust#86555 hits stable
-        let parts = self.into_parts();
-        Framed::from_parts(FramedParts {
-            io: parts.io,
-            codec: map(parts.codec),
-            read_buf: parts.read_buf,
-            write_buf: parts.write_buf,
-            _priv: (),
-        })
+        //
+        // Going through `FramedParts` would drop the backpressure boundary,
+        // which it has no field for. Move the state across intact instead, the
+        // way `FramedRead::map_decoder` and `FramedWrite::map_encoder` do.
+        let FramedImpl {
+            inner,
+            state,
+            codec,
+        } = self.inner;
+        Framed {
+            inner: FramedImpl {
+                inner,
+                state,
+                codec: map(codec),
+            },
+        }
     }
 
     /// Returns a mutable reference to the underlying codec wrapped by

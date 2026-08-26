@@ -203,3 +203,22 @@ fn external_buf_does_not_shrink() {
 
     assert_eq!(read_buf.capacity(), INITIAL_CAPACITY * 2);
 }
+
+#[test]
+fn map_codec_preserves_backpressure_boundary() {
+    let framed = Framed::with_capacity(DontReadIntoThis, U32Codec::default(), 4);
+    assert_eq!(framed.backpressure_boundary(), 4);
+
+    let framed = framed.map_codec(|codec| codec);
+    assert_eq!(
+        framed.backpressure_boundary(),
+        4,
+        "map_codec reset the backpressure boundary to the {INITIAL_CAPACITY} byte default"
+    );
+
+    let mut framed = Framed::new(DontReadIntoThis, U32Codec::default());
+    framed.set_backpressure_boundary(4);
+
+    let framed = framed.map_codec(|codec| codec);
+    assert_eq!(framed.backpressure_boundary(), 4);
+}
