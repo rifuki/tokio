@@ -932,3 +932,31 @@ async fn wake_after_clear() {
 fn ms(n: u64) -> Duration {
     Duration::from_millis(n)
 }
+
+#[tokio::test]
+async fn insert_at_wakes_parked_consumer_on_expired_entry() {
+    time::pause();
+
+    let mut queue = task::spawn(DelayQueue::new());
+
+    // A deadline in the past goes straight onto the expired list. Draining it
+    // leaves the queue holding the degenerate "now" timer that `insert_at` set
+    // for it, whose deadline has already elapsed.
+    queue.insert_at("a", Instant::now() - ms(1000));
+    let entry = assert_ready_some!(poll!(queue));
+    assert_eq!(*entry.get_ref(), "a");
+
+    assert_pending!(poll!(queue));
+    assert!(!queue.is_woken());
+
+    // Also already expired, so it is available to the very next poll.
+    queue.insert_at("b", Instant::now() - ms(1000));
+
+    assert!(
+        queue.is_woken(),
+        "insert_at made an entry available without waking the parked consumer"
+    );
+
+    let entry = assert_ready_some!(poll!(queue));
+    assert_eq!(*entry.get_ref(), "b");
+}

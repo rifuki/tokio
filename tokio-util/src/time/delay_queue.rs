@@ -551,6 +551,7 @@ impl<T> DelayQueue<T> {
         });
 
         self.insert_idx(when, key);
+        let inserted_expired = self.slab[key].expired;
 
         // Set a new delay if the current's deadline is later than the one of the new item
         let should_set_delay = if let Some(ref delay) = self.delay {
@@ -560,11 +561,16 @@ impl<T> DelayQueue<T> {
             true
         };
 
-        if should_set_delay {
+        // An entry that went straight onto the expired list is available to the
+        // very next poll, so a parked consumer has to be woken even when the
+        // timer needs no resetting. `reset_at` already wakes on this condition.
+        if should_set_delay || inserted_expired {
             if let Some(waker) = self.waker.take() {
                 waker.wake();
             }
+        }
 
+        if should_set_delay {
             let delay_time = self.start + Duration::from_millis(when);
             if let Some(ref mut delay) = &mut self.delay {
                 delay.as_mut().reset(delay_time);
