@@ -1115,7 +1115,10 @@ impl<T> DelayQueue<T> {
     #[track_caller]
     pub fn reserve(&mut self, additional: usize) {
         assert!(
-            self.slab.capacity() + additional <= MAX_ENTRIES,
+            self.slab
+                .capacity()
+                .checked_add(additional)
+                .is_some_and(|capacity| capacity <= MAX_ENTRIES),
             "max queue capacity exceeded"
         );
         self.slab.reserve(additional);

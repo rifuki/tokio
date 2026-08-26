@@ -932,3 +932,27 @@ async fn wake_after_clear() {
 fn ms(n: u64) -> Duration {
     Duration::from_millis(n)
 }
+
+#[test]
+fn reserve_overflow_reports_the_documented_panic() {
+    // `reserve` promises to panic with "max queue capacity exceeded" when the
+    // new capacity is too large. An unchecked addition inside the guard used to
+    // overflow first, so the documented assertion was never the one that fired.
+    let mut queue = DelayQueue::<u32>::with_capacity(3);
+
+    let prev_hook = std::panic::take_hook();
+    std::panic::set_hook(Box::new(|_| {}));
+    let payload = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        queue.reserve(usize::MAX);
+    }))
+    .unwrap_err();
+    std::panic::set_hook(prev_hook);
+
+    let message = payload
+        .downcast_ref::<&str>()
+        .copied()
+        .or_else(|| payload.downcast_ref::<String>().map(String::as_str))
+        .unwrap_or("<non-string panic payload>");
+
+    assert_eq!(message, "max queue capacity exceeded");
+}
