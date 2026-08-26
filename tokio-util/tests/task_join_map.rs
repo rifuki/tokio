@@ -792,3 +792,25 @@ mod spawn_local_on {
         }
     }
 }
+
+#[test]
+fn capacity_does_not_panic_after_join_cycle() {
+    use std::collections::hash_map::DefaultHasher;
+    use std::hash::BuildHasherDefault;
+
+    // A fixed hasher keeps this deterministic. With the default `RandomState`
+    // the two internal tables drift apart on most, but not all, runs.
+    let rt = rt();
+    rt.block_on(async {
+        let mut map: JoinMap<usize, usize, BuildHasherDefault<DefaultHasher>> =
+            JoinMap::with_hasher(BuildHasherDefault::default());
+
+        for i in 0..20 {
+            map.spawn(i, async move { i });
+        }
+
+        while map.join_next().await.is_some() {}
+
+        let _ = map.capacity();
+    });
+}

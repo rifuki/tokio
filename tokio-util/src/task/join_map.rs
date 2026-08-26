@@ -235,9 +235,10 @@ impl<K, V, S> JoinMap<K, V, S> {
     /// ```
     #[inline]
     pub fn capacity(&self) -> usize {
-        let capacity = self.tasks_by_key.capacity();
-        debug_assert_eq!(capacity, self.hashes_by_task.capacity());
-        capacity
+        // `hashes_by_task` is keyed by `task::Id`, not `K`, and hashbrown only
+        // restores `growth_left` on erase for buckets it can mark EMPTY, so the
+        // two capacities need not agree once anything has been removed.
+        self.tasks_by_key.capacity()
     }
 }
 
