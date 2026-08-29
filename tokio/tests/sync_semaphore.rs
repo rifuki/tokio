@@ -217,6 +217,15 @@ fn add_more_than_max_amount_permits2() {
 
 #[cfg(not(target_family = "wasm"))] // wasm currently doesn't support unwinding
 #[test]
+fn add_more_than_max_amount_permits_leaves_semaphore_unchanged() {
+    let s = Semaphore::new(Semaphore::MAX_PERMITS);
+    let res = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| s.add_permits(1)));
+    assert!(res.is_err());
+    assert_eq!(s.available_permits(), Semaphore::MAX_PERMITS);
+}
+
+#[cfg(not(target_family = "wasm"))] // wasm currently doesn't support unwinding
+#[test]
 #[should_panic]
 fn panic_when_exceeds_maxpermits() {
     let _ = Semaphore::new(Semaphore::MAX_PERMITS + 1);
